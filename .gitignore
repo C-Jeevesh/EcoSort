@@ -1,0 +1,8 @@
+# Ignore python cache and environment folders
+__pycache__/
+*.pyc
+venv/
+.env
+
+# Ignore system files
+.DS_Store
