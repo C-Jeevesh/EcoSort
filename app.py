@@ -5,98 +5,83 @@ import pandas as pd
 import time
 import pickle
 import datetime
+import re
 from skimage.feature import hog
 from sklearn import svm
 
 # ==========================================
-# 1. APP CONFIGURATION & THEME ENGINE
+# 1. SYSTEM CONFIGURATION
 # ==========================================
 st.set_page_config(
-    page_title="EcoSort Compliance",
-    page_icon="⚖️",
+    page_title="EcoSort Compliance Platform",
+    page_icon="🏢",
     layout="wide",
     initial_sidebar_state="expanded"
 )
 
-# Initialize Session State
-if 'theme' not in st.session_state: st.session_state['theme'] = 'Light'
-if 'data_log' not in st.session_state:
-    # Dummy data for demonstration
-    dates = pd.date_range(end=datetime.datetime.today(), periods=8).strftime("%Y-%m-%d").tolist()
-    st.session_state['data_log'] = pd.DataFrame({
-        'Date': dates,
-        'Item': ['Water Bottle', 'Apple Core', 'Soda Can', 'Newspaper', 'Banana Peel', 'Glass Jar', 'Cardboard Box', 'Pizza Crust'],
-        'Category': ['Recyclable', 'Organic', 'Recyclable', 'Recyclable', 'Organic', 'Recyclable', 'Recyclable', 'Organic'],
-        'Confidence': [0.92, 0.88, 0.95, 0.81, 0.90, 0.98, 0.85, 0.89]
-    })
+# --- PROFESSIONAL CSS ---
+st.markdown("""
+<style>
+    /* HIDE FOOTER */
+    footer {visibility: hidden;}
+    #MainMenu {visibility: visible;} 
+    
+    /* LOGIN CONTAINER */
+    .login-box {
+        border: 1px solid #e5e7eb;
+        padding: 40px;
+        border-radius: 8px;
+        max-width: 400px;
+        margin: 0 auto;
+        background-color: white;
+    }
 
-# --- DYNAMIC CSS FOR THEME SWITCHING ---
-def apply_theme():
-    if st.session_state['theme'] == 'Dark':
-        bg_color = "#1E1E1E"
-        text_color = "#FFFFFF"
-        card_bg = "#2D2D2D"
-        border_color = "#404040"
-    else:
-        bg_color = "#FFFFFF"
-        text_color = "#1F2937"
-        card_bg = "#F9FAFB"
-        border_color = "#E5E7EB"
-
-    st.markdown(f"""
-    <style>
-        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600&display=swap');
-        
-        html, body, [class*="css"] {{
-            font-family: 'Inter', sans-serif;
-            color: {text_color};
-            background-color: {bg_color};
-        }}
-        
-        /* HIDE STREAMLIT BRANDING */
-        #MainMenu {{visibility: hidden;}}
-        footer {{visibility: hidden;}}
-        header {{visibility: hidden;}}
-
-        /* APP CONTAINER BACKGROUND */
-        .stApp {{
-            background-color: {bg_color};
-        }}
-
-        /* CARDS */
-        .metric-card {{
-            background-color: {card_bg};
-            padding: 20px;
-            border-radius: 12px;
-            border: 1px solid {border_color};
-            text-align: center;
-            box-shadow: 0 2px 4px rgba(0,0,0,0.05);
-        }}
-        
-        .metric-value {{
-            font-size: 32px;
-            font-weight: 700;
-            color: #2563EB;
-        }}
-        
-        .metric-label {{
-            font-size: 14px;
-            opacity: 0.8;
-            margin-top: 5px;
-        }}
-
-        /* SIDEBAR */
-        [data-testid="stSidebar"] {{
-            background-color: {card_bg};
-            border-right: 1px solid {border_color};
-        }}
-    </style>
-    """, unsafe_allow_html=True)
-
-apply_theme()
+    /* METRIC CARDS */
+    .metric-container {
+        border: 1px solid #e0e0e0;
+        border-radius: 4px;
+        padding: 20px;
+        background-color: #f9fafb;
+    }
+    
+    /* FULL SCREEN LOGOUT MESSAGE styling */
+    .logout-container {
+        text-align: center;
+        margin-top: 100px;
+        padding: 50px;
+        border: 1px solid #ddd;
+        border-radius: 10px;
+        background-color: #f8f9fa;
+        max-width: 600px;
+        margin-left: auto;
+        margin-right: auto;
+    }
+</style>
+""", unsafe_allow_html=True)
 
 # ==========================================
-# 2. ROBUST BACKEND (CRASH PROOF)
+# 2. SESSION STATE MANAGEMENT
+# ==========================================
+if 'logged_in' not in st.session_state: st.session_state['logged_in'] = False
+if 'show_logout' not in st.session_state: st.session_state['show_logout'] = False # <--- NEW STATE
+if 'user_info' not in st.session_state: st.session_state['user_info'] = {}
+if 'users_db' not in st.session_state:
+    st.session_state['users_db'] = {
+        'admin@ecosort.gov': {'password': '123', 'name': 'System Administrator', 'role': 'Auditor Level 1'}
+    }
+if 'audit_log' not in st.session_state:
+    st.session_state['audit_log'] = pd.DataFrame({
+        'Date': [datetime.date.today().strftime("%Y-%m-%d")],
+        'User': ['admin@ecosort.gov'],
+        'Item_ID': ['AUD-001'],
+        'Classification': ['Recyclable'],
+        'Method': ['Camera']
+    })
+if 'settings' not in st.session_state:
+    st.session_state['settings'] = {'high_contrast': False, 'compact_mode': False}
+
+# ==========================================
+# 3. BACKEND LOGIC
 # ==========================================
 @st.cache_resource
 def load_engine():
@@ -104,7 +89,6 @@ def load_engine():
         with open('ecosort_svm_model.pkl', 'rb') as f:
             return pickle.load(f)
     except:
-        # Silent Fallback Simulation
         dummy_X = np.random.rand(10, 3780)
         dummy_y = ['R', 'O'] * 5
         model = svm.SVC(probability=True)
@@ -113,7 +97,7 @@ def load_engine():
 
 model = load_engine()
 
-def process_image(img_array):
+def process_features(img_array):
     gray = cv2.cvtColor(img_array, cv2.COLOR_RGB2GRAY)
     resized = cv2.resize(gray, (64, 128))
     features = hog(resized, orientations=9, pixels_per_cell=(8, 8),
@@ -121,144 +105,207 @@ def process_image(img_array):
     return features.reshape(1, -1)
 
 # ==========================================
-# 3. SIDEBAR NAVIGATION & SETTINGS
+# 4. AUTHENTICATION SCREENS
 # ==========================================
-with st.sidebar:
-    st.image("https://cdn-icons-png.flaticon.com/512/2964/2964514.png", width=50)
-    st.title("EcoSort Legal")
-    st.caption("Waste Compliance & Auditing Tool")
-    
-    st.markdown("---")
-    
-    # Simple Menu
-    menu = st.radio("Navigate", ["📊 Dashboard", "📷 Smart Scanner", "📚 Legal Guide", "💾 Export Data"])
-    
-    st.markdown("---")
-    
-    # Theme Toggle
-    st.markdown("**App Settings**")
-    is_dark = st.toggle("🌙 Dark Mode", value=(st.session_state['theme'] == 'Dark'))
-    
-    if is_dark and st.session_state['theme'] == 'Light':
-        st.session_state['theme'] = 'Dark'
-        st.rerun()
-    elif not is_dark and st.session_state['theme'] == 'Dark':
-        st.session_state['theme'] = 'Light'
-        st.rerun()
 
-# ==========================================
-# 4. PAGE: DASHBOARD (SIMPLE METRICS)
-# ==========================================
-if menu == "📊 Dashboard":
-    st.title("Facility Overview")
-    st.markdown("Here is your waste management summary at a glance.")
+# --- A. LOGIN SCREEN ---
+def login_screen():
+    col1, col2, col3 = st.columns([1, 2, 1])
     
-    df = st.session_state['data_log']
-    total = len(df)
-    recycled = len(df[df['Category'] == 'Recyclable'])
-    rate = int((recycled/total)*100) if total > 0 else 0
-    
-    # Simple Big Cards
-    c1, c2, c3 = st.columns(3)
-    with c1:
-        st.markdown(f"""<div class='metric-card'><div class='metric-value'>{total}</div><div class='metric-label'>Total Items Scanned</div></div>""", unsafe_allow_html=True)
-    with c2:
-        st.markdown(f"""<div class='metric-card'><div class='metric-value'>{rate}%</div><div class='metric-label'>Diversion Rate ℹ️</div></div>""", unsafe_allow_html=True)
-    with c3:
-        st.markdown(f"""<div class='metric-card'><div class='metric-value'>A+</div><div class='metric-label'>Compliance Score</div></div>""", unsafe_allow_html=True)
-
-    st.markdown("### 📈 Weekly Trends")
-    st.line_chart(df['Category'].value_counts())
-
-# ==========================================
-# 5. PAGE: SMART SCANNER
-# ==========================================
-elif menu == "📷 Smart Scanner":
-    st.title("Waste Auditor")
-    st.markdown("Identify items and log them for compliance reporting.")
-    
-    col_cam, col_info = st.columns([1, 1.2])
-    
-    with col_cam:
-        img_input = st.camera_input("Point camera at waste item")
-    
-    with col_info:
-        if img_input:
-            # Convert
-            bytes_data = img_input.getvalue()
-            img = cv2.imdecode(np.frombuffer(bytes_data, np.uint8), cv2.IMREAD_COLOR)
-            
-            # Processing Animation
-            with st.spinner("Analyzing material composition..."):
-                time.sleep(0.8) # UX delay
-                features = process_image(img)
-                pred = model.predict(features)[0]
-                prob = model.predict_proba(features).max()
-            
-            # Logic
-            is_recycle = (pred == 'R')
-            cat = "Recyclable (Blue Bin)" if is_recycle else "Organic/General (Green/Black Bin)"
-            color = "green" if is_recycle else "orange"
-            
-            # Log Data
-            new_row = {
-                'Date': datetime.datetime.now().strftime("%Y-%m-%d"),
-                'Item': 'Scanned Item',
-                'Category': 'Recyclable' if is_recycle else 'Organic',
-                'Confidence': round(prob, 2)
-            }
-            st.session_state['data_log'] = pd.concat([st.session_state['data_log'], pd.DataFrame([new_row])], ignore_index=True)
-
-            # Friendly Result Card
-            st.markdown(f"""
-            <div style="padding: 20px; border-radius: 10px; border: 2px solid {color}; background-color: rgba(0,0,0,0.02);">
-                <h2 style="color: {color}; margin-top:0;">{cat}</h2>
-                <p><strong>Confidence:</strong> {prob*100:.1f}%</p>
-                <hr>
-                <p>✅ <strong>Legal Action:</strong> Ensure item is clean before disposal to comply with Municipal Code 402.</p>
-            </div>
-            """, unsafe_allow_html=True)
-            
-        else:
-            st.info("👈 Ready to scan. Please center the item.")
-
-# ==========================================
-# 6. PAGE: LEGAL GUIDE
-# ==========================================
-elif menu == "📚 Legal Guide":
-    st.title("Compliance Library")
-    st.markdown("Reference guide for local waste management laws.")
-    
-    with st.expander("📜 Plastic Waste Management Rules (2024 Update)"):
-        st.write("""
-        * **Single-Use Plastics:** Strictly prohibited (Plastic bags < 100 microns).
-        * **PET Bottles:** Must be segregated for recycling.
-        * **Penalty:** Non-compliance can result in fines starting at ₹500.
-        """)
+    with col2:
+        st.markdown("<br><br>", unsafe_allow_html=True)
+        st.header("EcoSort Compliance System")
+        st.caption("Secure Access Gateway v4.5")
+        st.markdown("---")
         
-    with st.expander("🍂 Organic Waste Mandates"):
-        st.write("""
-        * **Wet Waste:** Must be composted or handed over to authorized collectors.
-        * **Burning:** Open burning of leaves/trash is a punishable offense.
-        """)
+        tab_login, tab_register = st.tabs(["Secure Login", "Register User"])
+        
+        with tab_login:
+            email = st.text_input("Email Address")
+            password = st.text_input("Password", type="password")
+            
+            if st.button("Authenticate", type="primary"):
+                db = st.session_state['users_db']
+                if email in db and db[email]['password'] == password:
+                    st.session_state['logged_in'] = True
+                    st.session_state['show_logout'] = False # Reset logout flag
+                    st.session_state['user_info'] = {'email': email, **db[email]}
+                    st.rerun()
+                else:
+                    st.error("Access Denied: Invalid Credentials")
 
-    with st.expander("☢️ E-Waste Disposal"):
-        st.write("Batteries and electronics must NOT be mixed with general bin trash.")
+        with tab_register:
+            new_email = st.text_input("New Email")
+            new_name = st.text_input("Full Name")
+            new_pass = st.text_input("Set Password", type="password")
+            
+            if st.button("Create Profile"):
+                email_regex = r'^[a-z0-9]+[\._]?[a-z0-9]+[@]\w+[.]\w{2,3}$'
+                if not re.search(email_regex, new_email):
+                    st.error("Invalid Email Format")
+                elif new_email in st.session_state['users_db']:
+                    st.error("User already exists")
+                elif new_pass:
+                    st.session_state['users_db'][new_email] = {
+                        'password': new_pass, 
+                        'name': new_name, 
+                        'role': 'Junior Auditor'
+                    }
+                    st.success("Registration Successful. Please Login.")
+                else:
+                    st.warning("All fields are required.")
+
+# --- B. LOGOUT CONFIRMATION SCREEN ---
+def logout_modal():
+    # This renders a full screen message
+    st.markdown("""
+        <div class="logout-container">
+            <h2>🔒 Secure Logout</h2>
+            <p>You have been successfully logged out of the EcoSort Compliance System.</p>
+            <p style="color: grey; font-size: 12px;">Session terminated at {}</p>
+            <hr>
+        </div>
+    """.format(datetime.datetime.now().strftime("%H:%M:%S")), unsafe_allow_html=True)
+    
+    col1, col2, col3 = st.columns([1.5, 1, 1.5])
+    with col2:
+        if st.button("Return to Sign In", type="primary"):
+            st.session_state['show_logout'] = False
+            st.session_state['logged_in'] = False
+            st.rerun()
 
 # ==========================================
-# 7. PAGE: EXPORT DATA
+# 5. MAIN APPLICATION
 # ==========================================
-elif menu == "💾 Export Data":
-    st.title("Data Compliance")
-    st.markdown("Download your logs for auditing purposes.")
-    
-    df = st.session_state['data_log']
-    st.dataframe(df, use_container_width=True)
-    
-    csv = df.to_csv(index=False).encode('utf-8')
-    st.download_button(
-        label="📥 Download Audit Log (CSV)",
-        data=csv,
-        file_name="waste_audit_log.csv",
-        mime="text/csv"
-    )
+def main_app():
+    # --- SIDEBAR (MENUBAR) ---
+    with st.sidebar:
+        st.title("System Menu")
+        st.info(f"User: {st.session_state['user_info'].get('name')}")
+        st.caption(f"ID: {st.session_state['user_info'].get('email')}")
+        st.markdown("---")
+        
+        # Navigation
+        menu = st.radio("Select Module:", ["Dashboard", "Waste Auditor", "Settings", "Logout"])
+        
+        st.markdown("---")
+        st.caption("System Status: Online")
+        
+        # LOGOUT LOGIC
+        if menu == "Logout":
+            # Instead of just logging out, we trigger the popup state
+            st.session_state['show_logout'] = True
+            st.rerun()
+
+    # --- DASHBOARD PAGE ---
+    if menu == "Dashboard":
+        st.subheader("Compliance Overview")
+        st.markdown("Real-time facility audit metrics.")
+        
+        df = st.session_state['audit_log']
+        
+        c1, c2, c3 = st.columns(3)
+        with c1:
+            st.metric("Total Records", len(df))
+        with c2:
+            recyclable = len(df[df['Classification'] == 'Recyclable'])
+            st.metric("Diversion Rate", f"{int((recyclable/len(df))*100)}%" if len(df)>0 else "0%")
+        with c3:
+            st.metric("Pending Reviews", "0")
+            
+        st.markdown("### Recent Logs")
+        st.dataframe(df, use_container_width=True)
+
+    # --- AUDITOR PAGE ---
+    elif menu == "Waste Auditor":
+        st.subheader("Data Acquisition")
+        st.markdown("Select input method for classification.")
+        
+        input_tab1, input_tab2 = st.tabs(["Live Camera Feed", "File Upload"])
+        
+        img_array = None
+        method = ""
+        
+        with input_tab1:
+            cam_input = st.camera_input("Capture Image")
+            if cam_input:
+                img_array = cv2.imdecode(np.frombuffer(cam_input.getvalue(), np.uint8), cv2.IMREAD_COLOR)
+                method = "Camera"
+
+        with input_tab2:
+            file_input = st.file_uploader("Select Image File", type=['jpg', 'jpeg', 'png'])
+            if file_input:
+                img_array = cv2.imdecode(np.frombuffer(file_input.getvalue(), np.uint8), cv2.IMREAD_COLOR)
+                st.image(img_array, caption="Uploaded Preview", width=300)
+                method = "Upload"
+
+        if img_array is not None:
+            st.markdown("---")
+            st.markdown("**Analysis Results**")
+            
+            with st.spinner("Processing feature vectors..."):
+                time.sleep(0.5)
+                features = process_features(img_array)
+                pred = model.predict(features)[0]
+                confidence = model.predict_proba(features).max()
+            
+            status = "Recyclable" if pred == 'R' else "Organic/General"
+            action = "Zone B (Recycling)" if pred == 'R' else "Zone G (Disposal)"
+            
+            c_res1, c_res2 = st.columns(2)
+            with c_res1:
+                st.info(f"Classification: {status}")
+            with c_res2:
+                st.text(f"Confidence: {confidence:.4f}")
+                
+            st.success(f"Action Required: {action}")
+            
+            new_log = {
+                'Date': datetime.datetime.now().strftime("%Y-%m-%d %H:%M"),
+                'User': st.session_state['user_info']['email'],
+                'Item_ID': f"AUD-{int(time.time())}",
+                'Classification': status,
+                'Method': method
+            }
+            st.session_state['audit_log'] = pd.concat([st.session_state['audit_log'], pd.DataFrame([new_log])], ignore_index=True)
+
+    # --- SETTINGS PAGE ---
+    elif menu == "Settings":
+        st.subheader("System Configuration")
+        
+        with st.expander("User Profile", expanded=True):
+            user = st.session_state['user_info']
+            st.text_input("Registered Email", value=user['email'], disabled=True)
+            st.text_input("Full Name", value=user['name'], disabled=True)
+            st.text_input("Clearance Role", value=user['role'], disabled=True)
+            if st.button("Request Password Reset"):
+                st.info("Reset link sent to administrator.")
+
+        with st.expander("Interface Customization"):
+            st.checkbox("Enable High Contrast Mode", value=st.session_state['settings']['high_contrast'])
+            st.checkbox("Compact Data View", value=st.session_state['settings']['compact_mode'])
+            
+            if st.session_state['settings']['high_contrast']:
+                st.markdown("""<style>.stApp {filter: contrast(120%);}</style>""", unsafe_allow_html=True)
+
+        with st.expander("About Application"):
+            st.markdown("""
+            **EcoSort Compliance Platform v4.5**
+            Designed for municipal and corporate waste auditing.
+            **Legal Disclaimer:** Predictions are for guidance only.
+            **Support:** tech-support@ecosort.gov
+            """)
+
+# ==========================================
+# 6. RUN CONTROLLER
+# ==========================================
+# Logic: If logout flag is True, show logout screen. 
+# Else, if logged in, show app. 
+# Else, show login.
+
+if st.session_state['show_logout']:
+    logout_modal()
+elif st.session_state['logged_in']:
+    main_app()
+else:
+    login_screen()
